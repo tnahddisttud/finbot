@@ -1,10 +1,9 @@
-import os
 import sqlite3
 from pathlib import Path
 
-from langchain_openai import AzureChatOpenAI
-from langchain_azure_ai.agents import AgentServiceFactory
-from azure.identity import DefaultAzureCredential
+from langchain_core.messages import SystemMessage
+from langchain_openai import ChatOpenAI
+from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.sqlite import SqliteSaver
 from app.config import settings
 from app.tools import tools
@@ -33,33 +32,28 @@ Given a stock ticker or company name, produce a concise, structured analyst brie
 - **Outlook:** 1-2 sentence synthesis, no advice
 """
 
-# ── Azure OpenAI LLM (replaces ChatGroq) ──────────────────
-llm = AzureChatOpenAI(
-    azure_deployment=settings.azure_openai_deployment,
-    azure_endpoint=settings.azure_openai_endpoint,
+# ── Azure OpenAI LLM (Foundry v1 endpoint) ───────────────
+_base_url = f"{settings.azure_openai_endpoint.rstrip('/')}/openai/v1/"
+llm = ChatOpenAI(
+    model=settings.azure_openai_deployment,
+    base_url=_base_url,
     api_key=settings.azure_openai_api_key,
-    api_version=settings.azure_openai_api_version,
+    default_headers={"api-key": settings.azure_openai_api_key},
     temperature=0,
     max_retries=2,
 )
 
-# ── SQLite checkpointer (unchanged) ───────────────────────
+# ── SQLite checkpointer ───────────────────────────────────
 Path(settings.sqlite_db_path).parent.mkdir(parents=True, exist_ok=True)
 conn = sqlite3.connect(settings.sqlite_db_path, check_same_thread=False)
 checkpointer = SqliteSaver(conn)
 
-# ── Azure AI Foundry Agent Factory ────────────────────────
-factory = AgentServiceFactory(
-    project_endpoint=settings.azure_ai_project_endpoint,
-    credential=DefaultAzureCredential(),
-)
-
-# ── Register agent in Foundry ──────────────────────────────
-agent = factory.create_prompt_agent(
-    name="finbot-assistant",
-    model=settings.azure_openai_deployment,
-    instructions=SYSTEM_PROMPT,
+# ── LangGraph ReAct agent ─────────────────────────────────
+agent = create_react_agent(
+    llm,
     tools=tools,
+    prompt=SystemMessage(content=SYSTEM_PROMPT),
+    checkpointer=checkpointer,
 )
 
 
@@ -86,4 +80,4 @@ def run_agent(query: str, thread_id: str) -> str:
                 texts.append(item.get("text", ""))
         return "\n".join(texts).strip()
 
-    return str(content)
+    return str(content)

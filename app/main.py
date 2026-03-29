@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.schemas import BriefRequest, BriefResponse
 from app.agent import run_agent
 from dotenv import load_dotenv
-
+from traceback import print_exc
 _ = load_dotenv()
 app = FastAPI(title="FinBot API")
 
@@ -24,5 +24,9 @@ def health():
 
 @app.post("/brief", response_model=BriefResponse)
 def brief(payload: BriefRequest):
-    result = run_agent(payload.query, payload.thread_id)
-    return BriefResponse(result=result)
+    try:
+        result = run_agent(payload.query, payload.thread_id)
+        return BriefResponse(result=result)
+    except Exception as e:
+        print_exc()
+        return BriefResponse(result=f"Error: {str(e)}")
