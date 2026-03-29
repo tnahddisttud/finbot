@@ -2,13 +2,12 @@ import os
 import sqlite3
 from pathlib import Path
 
-from langchain.agents import create_agent
-from langchain_groq import ChatGroq
+from langchain_openai import AzureChatOpenAI
+from langchain_azure_ai.agents import AgentServiceFactory
+from azure.identity import DefaultAzureCredential
 from langgraph.checkpoint.sqlite import SqliteSaver
-from langsmith import traceable
 from app.config import settings
 from app.tools import tools
-
 
 SYSTEM_PROMPT = """
 You are FinBot, an expert equity research analyst with deep knowledge of financial markets,
@@ -30,36 +29,40 @@ Given a stock ticker or company name, produce a concise, structured analyst brie
 - **Fundamentals:** price, P/E, market cap, revenue growth (one line)
 - **Valuation Signal:** OVERVALUED / FAIRLY VALUED / UNDERVALUED + reason
 - **News Sentiment:** bullish / neutral / bearish + key headline
-- **Key Risks:** 1–2 bullets
-- **Outlook:** 1–2 sentence synthesis, no advice
+- **Key Risks:** 1-2 bullets
+- **Outlook:** 1-2 sentence synthesis, no advice
 """
 
-
-os.environ["GROQ_API_KEY"] = settings.groq_api_key
-os.environ["SERPAPI_API_KEY"] = settings.serpapi_api_key
-
-llm = ChatGroq(
-    model=settings.groq_model,
+# ── Azure OpenAI LLM (replaces ChatGroq) ──────────────────
+llm = AzureChatOpenAI(
+    azure_deployment=settings.azure_openai_deployment,
+    azure_endpoint=settings.azure_openai_endpoint,
+    api_key=settings.azure_openai_api_key,
+    api_version=settings.azure_openai_api_version,
     temperature=0,
-    max_tokens=None,
-    reasoning_format="parsed",
-    timeout=None,
     max_retries=2,
 )
 
+# ── SQLite checkpointer (unchanged) ───────────────────────
 Path(settings.sqlite_db_path).parent.mkdir(parents=True, exist_ok=True)
 conn = sqlite3.connect(settings.sqlite_db_path, check_same_thread=False)
 checkpointer = SqliteSaver(conn)
 
-agent = create_agent(
-    llm,
+# ── Azure AI Foundry Agent Factory ────────────────────────
+factory = AgentServiceFactory(
+    project_endpoint=settings.azure_ai_project_endpoint,
+    credential=DefaultAzureCredential(),
+)
+
+# ── Register agent in Foundry ──────────────────────────────
+agent = factory.create_prompt_agent(
+    name="finbot-assistant",
+    model=settings.azure_openai_deployment,
+    instructions=SYSTEM_PROMPT,
     tools=tools,
-    system_prompt=SYSTEM_PROMPT,
-    checkpointer=checkpointer,
 )
 
 
-@traceable(name="FinBot: Full Stock Brief", run_type="chain")
 def run_agent(query: str, thread_id: str) -> str:
     response = agent.invoke(
         {"messages": [{"role": "user", "content": query}]},
